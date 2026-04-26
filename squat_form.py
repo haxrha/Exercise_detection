@@ -99,17 +99,13 @@ def extract_keypoints_from_videos():
 
 # --- Angle Calculation Helper ---
 def calculate_angle(a, b, c):
-    """
-    Calculate the angle at point b, formed by points a, b, c.
-    a, b, c are (x, y) coordinate pairs.
-    """
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
+    a = np.array(a, dtype=float).flatten()
+    b = np.array(b, dtype=float).flatten()
+    c = np.array(c, dtype=float).flatten()
 
     radians = np.arctan2(c[1] - b[1], c[0] - b[0]) - \
               np.arctan2(a[1] - b[1], a[0] - b[0])
-    angle = np.abs(np.degrees(radians))
+    angle = float(np.abs(np.degrees(radians)))
 
     if angle > 180:
         angle = 360 - angle
@@ -240,10 +236,12 @@ def run_webcam():
 
     data = []
     frame_num = 0
-    current_label = "Analyzing..."
+    current_label = "Start squatting!"
     label_color = (255, 255, 255)
+    last_score_time = cv2.getTickCount()
+    score_interval = 10  # Score every 10 seconds
 
-    print("Webcam running. Press 's' to score your form, 'r' to reset, 'q' to quit.")
+    print("Webcam running. Press 'r' to reset, 'q' to quit.")
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -266,11 +264,35 @@ def run_webcam():
                     'confidence': conf
                 })
 
-        # Display current label on frame
+        # --- Auto Score Every 10 Seconds ---
+        elapsed = (cv2.getTickCount() - last_score_time) / cv2.getTickFrequency()
+
+        if elapsed >= score_interval and len(data) > 0:
+            df = pd.DataFrame(data)
+            features = extract_features_from_csv_df(df)
+            if features is not None:
+                X = np.array([features])
+                prediction = classifier.predict(X)
+                if prediction[0] == 0:
+                    current_label = "Good Form!"
+                    label_color = (0, 255, 0)
+                    print("Form Assessment: Good Form!")
+                else:
+                    current_label = "Bad Form!"
+                    label_color = (0, 0, 255)
+                    print("Form Assessment: Bad Form!")
+            else:
+                current_label = "Can't detect pose, adjust position!"
+                label_color = (255, 255, 0)
+
+            # Reset for next round
+            data = []
+            frame_num = 0
+            last_score_time = cv2.getTickCount()
+
+        # --- Display Label on Frame ---
         cv2.putText(annotated_frame, current_label, (10, 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, label_color, 3)
-        cv2.putText(annotated_frame, f"Frames collected: {frame_num}", (10, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
         cv2.imshow("Squat Form Analyzer", annotated_frame)
 
@@ -280,40 +302,26 @@ def run_webcam():
         elif key == ord('r'):
             data = []
             frame_num = 0
-            current_label = "Analyzing..."
+            current_label = "Start squatting!"
             label_color = (255, 255, 255)
+            last_score_time = cv2.getTickCount()
             print("Reset!")
-        elif key == ord('s') and len(data) > 0:
-            df = pd.DataFrame(data)
-            features = extract_features_from_csv_df(df)
-            if features is not None:
-                X = np.array([features])
-                prediction = classifier.predict(X)
-                if prediction[0] == 0:
-                    current_label = "Good Form!"
-                    label_color = (0, 255, 0)  # Green
-                    print("Form Assessment: Good Form!")
-                else:
-                    current_label = "Bad Form!"
-                    label_color = (0, 0, 255)  # Red
-                    print("Form Assessment: Bad Form!")
-            else:
-                print("Not enough data yet, keep squatting!")
 
     cap.release()
     cv2.destroyAllWindows()
 
 # --- Feature Extraction from DataFrame (for live webcam) ---
 def extract_features_from_csv_df(df):
-    # Same as extract_features_from_csv but takes a dataframe directly
-    LEFT_HIP    = 11
-    RIGHT_HIP   = 12
-    LEFT_KNEE   = 13
-    RIGHT_KNEE  = 14
-    LEFT_ANKLE  = 15
-    RIGHT_ANKLE = 16
+    LEFT_HIP       = 11
+    RIGHT_HIP      = 12
+    LEFT_KNEE      = 13
+    RIGHT_KNEE     = 14
+    LEFT_ANKLE     = 15
+    RIGHT_ANKLE    = 16
     LEFT_SHOULDER  = 5
     RIGHT_SHOULDER = 6
+
+    df = df.groupby(['frame', 'keypoint_id']).first().reset_index()
 
     frames = df['frame'].unique()
     knee_angles = []
@@ -328,14 +336,15 @@ def extract_features_from_csv_df(df):
         if not all(k in frame_data.index for k in needed):
             continue
 
-        left_hip     = (frame_data.loc[LEFT_HIP,    'x'], frame_data.loc[LEFT_HIP,    'y'])
-        right_hip    = (frame_data.loc[RIGHT_HIP,   'x'], frame_data.loc[RIGHT_HIP,   'y'])
-        left_knee    = (frame_data.loc[LEFT_KNEE,   'x'], frame_data.loc[LEFT_KNEE,   'y'])
-        right_knee   = (frame_data.loc[RIGHT_KNEE,  'x'], frame_data.loc[RIGHT_KNEE,  'y'])
-        left_ankle   = (frame_data.loc[LEFT_ANKLE,  'x'], frame_data.loc[LEFT_ANKLE,  'y'])
-        right_ankle  = (frame_data.loc[RIGHT_ANKLE, 'x'], frame_data.loc[RIGHT_ANKLE, 'y'])
-        left_shoulder  = (frame_data.loc[LEFT_SHOULDER,  'x'], frame_data.loc[LEFT_SHOULDER,  'y'])
-        right_shoulder = (frame_data.loc[RIGHT_SHOULDER, 'x'], frame_data.loc[RIGHT_SHOULDER, 'y'])
+        # Extract as plain floats
+        left_hip      = (float(frame_data.loc[LEFT_HIP,    'x']), float(frame_data.loc[LEFT_HIP,    'y']))
+        right_hip     = (float(frame_data.loc[RIGHT_HIP,   'x']), float(frame_data.loc[RIGHT_HIP,   'y']))
+        left_knee     = (float(frame_data.loc[LEFT_KNEE,   'x']), float(frame_data.loc[LEFT_KNEE,   'y']))
+        right_knee    = (float(frame_data.loc[RIGHT_KNEE,  'x']), float(frame_data.loc[RIGHT_KNEE,  'y']))
+        left_ankle    = (float(frame_data.loc[LEFT_ANKLE,  'x']), float(frame_data.loc[LEFT_ANKLE,  'y']))
+        right_ankle   = (float(frame_data.loc[RIGHT_ANKLE, 'x']), float(frame_data.loc[RIGHT_ANKLE, 'y']))
+        left_shoulder  = (float(frame_data.loc[LEFT_SHOULDER,  'x']), float(frame_data.loc[LEFT_SHOULDER,  'y']))
+        right_shoulder = (float(frame_data.loc[RIGHT_SHOULDER, 'x']), float(frame_data.loc[RIGHT_SHOULDER, 'y']))
 
         left_knee_angle  = calculate_angle(left_hip,  left_knee,  left_ankle)
         right_knee_angle = calculate_angle(right_hip, right_knee, right_ankle)
@@ -354,8 +363,8 @@ def extract_features_from_csv_df(df):
         return None
 
     features = [
-        np.mean(knee_angles),   np.std(knee_angles),   np.min(knee_angles),
-        np.mean(hip_angles),    np.std(hip_angles),     np.min(hip_angles),
+        np.mean(knee_angles),      np.std(knee_angles),      np.min(knee_angles),
+        np.mean(hip_angles),       np.std(hip_angles),       np.min(hip_angles),
         np.mean(knee_cave_ratios), np.std(knee_cave_ratios), np.min(knee_cave_ratios),
     ]
 
